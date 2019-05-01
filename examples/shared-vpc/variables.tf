@@ -8,21 +8,21 @@ variable "region_zone" {
 
 variable "org_id" {
   description = "The ID of the Google Cloud Organization."
-  default = "1037670760632"
+  default = ""
 }
 
 variable "billing_account_id" {
   description = "The ID of the associated billing account (optional)."
-  default = "0159BC-1EA462-BEE540"
+  default = ""
 }
 
 variable "credentials_file_path" {
   description = "Location of the credentials to use."
-  default     = "/home/bhupen/terraform-cna-g-proj-bootstrap.key.json"
+  default     = "~/.gcloud/Terraform.json"
 }
 
 variable "folder_id" {
-  default = "130348824676"
+  default = ""
 }
 
 variable "peering_address_range_name" {
