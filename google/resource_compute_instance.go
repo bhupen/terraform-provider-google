@@ -285,12 +285,6 @@ func resourceComputeInstance() *schema.Resource {
 				ForceNew: true,
 			},
 
-			"create_timeout": {
-				Type:     schema.TypeInt,
-				Computed: true,
-				Removed:  "Use timeouts block instead.",
-			},
-
 			"description": {
 				Type:     schema.TypeString,
 				Optional: true,
@@ -370,10 +364,11 @@ func resourceComputeInstance() *schema.Resource {
 			},
 
 			"guest_accelerator": {
-				Type:     schema.TypeList,
-				Optional: true,
-				Computed: true,
-				ForceNew: true,
+				Type:       schema.TypeList,
+				Optional:   true,
+				Computed:   true,
+				ForceNew:   true,
+				ConfigMode: schema.SchemaConfigModeAttr,
 				Elem: &schema.Resource{
 					Schema: map[string]*schema.Schema{
 						"count": {
@@ -395,7 +390,6 @@ func resourceComputeInstance() *schema.Resource {
 				Type:     schema.TypeMap,
 				Optional: true,
 				Elem:     &schema.Schema{Type: schema.TypeString},
-				Set:      schema.HashString,
 			},
 
 			"metadata": {
@@ -939,14 +933,34 @@ func resourceComputeInstanceUpdate(d *schema.ResourceData, meta interface{}) err
 			return err
 		}
 
-		op, err := config.clientCompute.Instances.SetMetadata(project, zone, d.Id(), metadataV1).Do()
-		if err != nil {
-			return fmt.Errorf("Error updating metadata: %s", err)
-		}
+		// We're retrying for an error 412 where the metadata fingerprint is out of date
+		err = retry(
+			func() error {
+				// retrieve up-to-date metadata from the API in case several updates hit simultaneously. instances
+				// sometimes but not always share metadata fingerprints.
+				instance, err := config.clientComputeBeta.Instances.Get(project, zone, d.Id()).Do()
+				if err != nil {
+					return fmt.Errorf("Error retrieving metadata: %s", err)
+				}
 
-		opErr := computeOperationWaitTime(config.clientCompute, op, project, "metadata to update", int(d.Timeout(schema.TimeoutUpdate).Minutes()))
-		if opErr != nil {
-			return opErr
+				metadataV1.Fingerprint = instance.Metadata.Fingerprint
+
+				op, err := config.clientCompute.Instances.SetMetadata(project, zone, d.Id(), metadataV1).Do()
+				if err != nil {
+					return fmt.Errorf("Error updating metadata: %s", err)
+				}
+
+				opErr := computeOperationWaitTime(config.clientCompute, op, project, "metadata to update", int(d.Timeout(schema.TimeoutUpdate).Minutes()))
+				if opErr != nil {
+					return opErr
+				}
+
+				return nil
+			},
+		)
+
+		if err != nil {
+			return err
 		}
 
 		d.SetPartial("metadata")
