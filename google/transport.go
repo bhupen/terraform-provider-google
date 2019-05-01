@@ -14,6 +14,8 @@ import (
 	"google.golang.org/api/googleapi"
 )
 
+var DefaultRequestTimeout = 5 * time.Minute
+
 func isEmptyValue(v reflect.Value) bool {
 	switch v.Kind() {
 	case reflect.Array, reflect.Map, reflect.Slice, reflect.String:
@@ -33,7 +35,7 @@ func isEmptyValue(v reflect.Value) bool {
 }
 
 func sendRequest(config *Config, method, rawurl string, body map[string]interface{}) (map[string]interface{}, error) {
-	return sendRequestWithTimeout(config, method, rawurl, body, 5*time.Minute)
+	return sendRequestWithTimeout(config, method, rawurl, body, DefaultRequestTimeout)
 }
 
 func sendRequestWithTimeout(config *Config, method, rawurl string, body map[string]interface{}, timeout time.Duration) (map[string]interface{}, error) {
@@ -119,31 +121,39 @@ func addQueryParams(rawurl string, params map[string]string) (string, error) {
 
 func replaceVars(d TerraformResourceData, config *Config, linkTmpl string) (string, error) {
 	re := regexp.MustCompile("{{([[:word:]]+)}}")
+	f, err := buildReplacementFunc(re, d, config, linkTmpl)
+	if err != nil {
+		return "", err
+	}
+	return re.ReplaceAllStringFunc(linkTmpl, f), nil
+}
+
+func buildReplacementFunc(re *regexp.Regexp, d TerraformResourceData, config *Config, linkTmpl string) (func(string) string, error) {
 	var project, region, zone string
 	var err error
 
 	if strings.Contains(linkTmpl, "{{project}}") {
 		project, err = getProject(d, config)
 		if err != nil {
-			return "", err
+			return nil, err
 		}
 	}
 
 	if strings.Contains(linkTmpl, "{{region}}") {
 		region, err = getRegion(d, config)
 		if err != nil {
-			return "", err
+			return nil, err
 		}
 	}
 
 	if strings.Contains(linkTmpl, "{{zone}}") {
 		zone, err = getZone(d, config)
 		if err != nil {
-			return "", err
+			return nil, err
 		}
 	}
 
-	replaceFunc := func(s string) string {
+	f := func(s string) string {
 		m := re.FindStringSubmatch(s)[1]
 		if m == "project" {
 			return project
@@ -161,5 +171,5 @@ func replaceVars(d TerraformResourceData, config *Config, linkTmpl string) (stri
 		return ""
 	}
 
-	return re.ReplaceAllStringFunc(linkTmpl, replaceFunc), nil
+	return f, nil
 }
