@@ -12,6 +12,30 @@ locals {
   gke_master_authorized_subnet = "${google_compute_subnetwork.shared_network.ip_cidr_range}"
 }
 
+resource "google_service_account" "gcp_gke_service_account_app" {
+  project = "${local.gke_project_id}"
+  account_id = "gke-cluster-app"
+  display_name = "GKE Cluser App"
+}
+
+resource "google_project_iam_member" "gcp_container_app_iam_member_1" {
+  project = "${local.gke_project_id}"
+  role = "roles/storage.admin"
+  member = "serviceAccount:${google_service_account.gcp_gke_service_account_app.email}"
+  depends_on = [
+    "google_service_account.gcp_gke_service_account_app",
+  ]
+}
+
+resource "google_project_iam_member" "gcp_container_app_iam_member_2" {
+  project = "${local.gke_project_id}"
+  role = "roles/storage.objectAdmin"
+  member = "serviceAccount:${google_service_account.gcp_gke_service_account_app.email}"
+  depends_on = [
+    "google_service_account.gcp_gke_service_account_app",
+  ]
+}
+
 resource "google_service_account" "gcp_gke_service_account" {
   project = "${local.gke_project_id}"
   account_id = "gke-cluster-admin"
@@ -93,12 +117,17 @@ resource "google_container_cluster" "gke_cluster" {
   network = "${local.gke_network}"
   subnetwork = "${local.gke_subnet}"
 
+  
+    
   master_authorized_networks_config {
     cidr_blocks {
       cidr_block = "${local.gke_master_authorized_subnet}"
       display_name = "shared-network-hosts"
     }
   }
+
+  logging_service = "logging.googleapis.com/kubernetes"
+  monitoring_service = "monitoring.googleapis.com/kubernetes"
 
   ip_allocation_policy {
     cluster_secondary_range_name = "${local.gke_pod_range}"
