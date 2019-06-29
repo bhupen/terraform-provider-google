@@ -125,6 +125,7 @@ resource "google_sql_database_instance" "instance-1" {
   }
 }
 
+
 resource "null_resource" "destroy-vpc-to-services-peering" {
   provisioner "local-exec" {
     when = "destroy"

@@ -208,7 +208,55 @@ resource "google_compute_network" "shared_network" {
 }
 
 resource "google_compute_subnetwork" "shared_network" {
-  ip_cidr_range = "10.128.0.0/20"
+  ip_cidr_range = "10.35.1.0/24"
+  name = "shared-network"
+  network = "${google_compute_network.shared_network.self_link}"
+  project = "${google_compute_shared_vpc_host_project.host_project.project}"
+  enable_flow_logs = "true"
+  private_ip_google_access = "true"
+  secondary_ip_range {
+    ip_cidr_range = "172.30.0.0/15"
+    range_name = "pods"
+  }
+  secondary_ip_range {
+    ip_cidr_range = "10.35.2.0/24"
+    range_name = "services"
+  }
+}
+
+# Create the host DR network.
+resource "google_compute_network" "shared_network-dr" {
+  name = "shared-network-dr"
+  auto_create_subnetworks = "false"
+  project = "${google_compute_shared_vpc_host_project.host_project.project}"
+
+  depends_on = [
+    "google_compute_shared_vpc_service_project.service_project_1",
+    "google_compute_shared_vpc_service_project.service_project_2",
+  ]
+}
+
+
+resource "google_compute_subnetwork" "shared_network-dr" {
+  ip_cidr_range = "10.35.128.0/24"
+  name = "shared-network-dr"
+  network = "${google_compute_network.shared_network-dr.self_link}"
+  project = "${google_compute_shared_vpc_host_project.host_project.project}"
+  enable_flow_logs = "true"
+  private_ip_google_access = "true"
+  secondary_ip_range {
+    ip_cidr_range = "172.30.0.0/15"
+    range_name = "pods"
+  }
+  secondary_ip_range {
+    ip_cidr_range = "10.35.2.0/24"
+    range_name = "services"
+  }
+}
+
+/*
+resource "google_compute_subnetwork" "shared_network" {
+  ip_cidr_range = "10.165.124.0/24"
   name = "shared-network"
   network = "${google_compute_network.shared_network.self_link}"
   project = "${google_compute_shared_vpc_host_project.host_project.project}"
@@ -216,7 +264,7 @@ resource "google_compute_subnetwork" "shared_network" {
   private_ip_google_access = "true"
 }
 
-/*
+
 resource "google_compute_subnetwork" "shared_network_gke" {
   ip_cidr_range = "10.128.16.0/20"
   name = "shared-network"
@@ -242,14 +290,14 @@ module "shared_network" {
   project = "${google_compute_shared_vpc_host_project.host_project.project}"
   ip_cidr_range = "10.128.0.0/20"
 }
-*/
+
 
 module "shared_network_gke" {
   source = "../../../terraform-google-network-subnet"
   name = "shared-network-gke"
   description = "shared subnet gke"
   network = "${google_compute_network.shared_network.self_link}"
-  ip_cidr_range = "10.128.16.0/20"
+  ip_cidr_range = "10.165.124.0/24"
   project = "${google_compute_shared_vpc_host_project.host_project.project}"
 
   create_secondary_ranges = true
@@ -259,12 +307,12 @@ module "shared_network_gke" {
       range_name = "pods"
     },
     {
-      ip_cidr_range = "10.128.32.0/20"
+      ip_cidr_range = "10.165.125.0/24"
       range_name = "services"
     },
   ]
 }
-
+*/
 # Allow the hosted network to be hit over ICMP, SSH, and HTTP.
 resource "google_compute_firewall" "shared_network" {
   name = "allow-ssh-and-icmp"
@@ -279,7 +327,29 @@ resource "google_compute_firewall" "shared_network" {
     protocol = "tcp"
     ports = [
       "22",
-      "80"]
+      "80",
+      "443"
+    ]
+  }
+
+}
+
+resource "google_compute_firewall" "shared_network_dr" {
+  name = "allow-ssh-and-icmp-dr"
+  network = "${google_compute_network.shared_network-dr.self_link}"
+  project = "${google_compute_network.shared_network.project}"
+
+  allow {
+    protocol = "icmp"
+  }
+
+  allow {
+    protocol = "tcp"
+    ports = [
+      "22",
+      "80",
+      "443"
+    ]
   }
 
 }
@@ -287,6 +357,23 @@ resource "google_compute_firewall" "shared_network" {
 resource "google_compute_firewall" "shared_network_deny_cloud_sql_access" {
   name = "deny-direct-cloud-sql-access"
   network = "${google_compute_network.shared_network.self_link}"
+  project = "${google_compute_network.shared_network.project}"
+  direction = "EGRESS"
+  destination_ranges = [
+    "${var.peering_cidr_range}/${var.peering_cidr_prefix}"]
+
+  deny {
+    protocol = "tcp"
+    ports = [
+      "3306",
+      "5432"]
+  }
+}
+
+
+resource "google_compute_firewall" "shared_network_dr_deny_cloud_sql_access" {
+  name = "deny-direct-cloud-sql-access-dr"
+  network = "${google_compute_network.shared_network-dr.self_link}"
   project = "${google_compute_network.shared_network.project}"
   direction = "EGRESS"
   destination_ranges = [
@@ -345,9 +432,42 @@ resource "google_compute_instance" "project_1_vm" {
   network_interface {
    // network = "${google_compute_network.shared_network.self_link}"
     subnetwork = "${google_compute_subnetwork.shared_network.self_link}"
-    access_config {
+  /*  access_config {
       // Ephemeral IP
+    }*/
+  }
+
+  service_account {
+    scopes = [
+      "https://www.googleapis.com/auth/compute.readonly"]
+  }
+
+  depends_on = [
+    "google_project_service.service_project_1",
+    "google_compute_subnetwork.shared_network"]
+}
+
+#Create a VM which hosts a web page stating its identity ("VM2")
+resource "google_compute_instance" "project_4_vm" {
+  name = "tf-project-4-vm"
+  project = "${google_project.host_project.project_id}"
+  machine_type = "f1-micro"
+  zone = "${var.region_zone}"
+
+  boot_disk {
+    initialize_params {
+      image = "projects/gce-uefi-images/global/images/family/ubuntu-1804-lts"
     }
+  }
+
+  metadata_startup_script = "VM_NAME=VM1\n${file("scripts/install-vm.sh")}"
+
+  network_interface {
+   // network = "${google_compute_network.shared_network.self_link}"
+    subnetwork = "${google_compute_subnetwork.shared_network-dr.self_link}"
+  /*  access_config {
+      // Ephemeral IP
+    }*/
   }
 
   service_account {
@@ -373,21 +493,21 @@ resource "google_compute_instance" "project_2_vm" {
     }
   }
 
-  metadata_startup_script = <<EOF
+ /* metadata_startup_script = <<EOF
 VM1_EXT_IP=${google_compute_instance.project_1_vm.network_interface.0.access_config.0.nat_ip}
 ST_VM_EXT_IP=${google_compute_instance.standalone_project_vm.network_interface.0.access_config.0.nat_ip}
 VM1_INT_IP=${google_compute_instance.project_1_vm.network_interface.0.address}
 ST_VM_INT_IP=${google_compute_instance.standalone_project_vm.network_interface.0.address}
 ${file("scripts/install-network-page.sh")}
-EOF
+EOF*/
 
   network_interface {
  //   network = "${google_compute_network.shared_network.self_link}"
     subnetwork = "${google_compute_subnetwork.shared_network.self_link}"
 
-    access_config {
+   /* access_config {
       // Ephemeral IP
-    }
+    }*/
   }
 
   service_account {
@@ -433,3 +553,11 @@ resource "google_compute_instance" "standalone_project_vm" {
     "google_compute_subnetwork.shared_network"]
 }
 
+resource "google_project_iam_binding" "service-project-1-network-user" {
+  project = "${google_project.host_project.project_id}"
+  role    = "roles/compute.networkUser"
+
+  members = [
+    "serviceAccount:${format("%s@cloudservices.gserviceaccount.com", "${google_project.service_project_1.number}")}",
+  ]
+}

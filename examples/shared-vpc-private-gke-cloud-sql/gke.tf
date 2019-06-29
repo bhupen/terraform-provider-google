@@ -6,10 +6,40 @@ locals {
   gke_project_number = "${google_project.service_project_2.number}"
   gke_region = "${var.region}"
   gke_network = "${google_compute_network.shared_network.self_link}"
-  gke_subnet = "${module.shared_network_gke.self_link}"
-  gke_pod_range = "${module.shared_network_gke.secondary_range_names[0]}"
-  gke_service_range = "${module.shared_network_gke.secondary_range_names[1]}"
+  //  gke_subnet = "${module.shared_network_gke.self_link}"
+  //  gke_pod_range = "${module.shared_network_gke.secondary_range_names[0]}"
+  //  gke_service_range = "${module.shared_network_gke.secondary_range_names[1]}"
+
+  gke_subnet = "${google_compute_subnetwork.shared_network.self_link}"
+  gke_pod_range = "pods"
+  gke_service_range = "services"
   gke_master_authorized_subnet = "${google_compute_subnetwork.shared_network.ip_cidr_range}"
+}
+
+resource "google_service_account" "gcp_gke_service_account_app" {
+  project = "${local.gke_project_id}"
+  account_id = "gke-cluster-app"
+  display_name = "GKE Cluser App"
+}
+
+resource "google_project_iam_member" "gcp_container_app_iam_member_1" {
+  project = "${local.gke_project_id}"
+  role = "roles/storage.admin"
+  member = "serviceAccount:${google_service_account.gcp_gke_service_account_app.email}"
+
+  depends_on = [
+    "google_service_account.gcp_gke_service_account_app",
+  ]
+}
+
+resource "google_project_iam_member" "gcp_container_app_iam_member_2" {
+  project = "${local.gke_project_id}"
+  role = "roles/storage.objectAdmin"
+  member = "serviceAccount:${google_service_account.gcp_gke_service_account_app.email}"
+
+  depends_on = [
+    "google_service_account.gcp_gke_service_account_app",
+  ]
 }
 
 resource "google_service_account" "gcp_gke_service_account" {
@@ -93,12 +123,17 @@ resource "google_container_cluster" "gke_cluster" {
   network = "${local.gke_network}"
   subnetwork = "${local.gke_subnet}"
 
+  min_master_version = "${var.master_version}"
+
   master_authorized_networks_config {
     cidr_blocks {
       cidr_block = "${local.gke_master_authorized_subnet}"
       display_name = "shared-network-hosts"
     }
   }
+
+  logging_service = "logging.googleapis.com/kubernetes"
+  monitoring_service = "monitoring.googleapis.com/kubernetes"
 
   ip_allocation_policy {
     cluster_secondary_range_name = "${local.gke_pod_range}"
@@ -108,11 +143,12 @@ resource "google_container_cluster" "gke_cluster" {
   private_cluster_config {
     enable_private_endpoint = "true"
     enable_private_nodes = "true"
-    master_ipv4_cidr_block = "192.168.128.0/28"
+    master_ipv4_cidr_block = "10.35.127.0/28"
   }
 
   depends_on = [
-    "module.shared_network_gke",
+//    "module.shared_network_gke",
+    "google_compute_subnetwork.shared_network",
     "google_project_iam_member.gcp_gke_default_service_account_compute_networkUser",
     "google_project_iam_member.gcp_gke_default_service_account_container_hostServiceAgentUser",
     "google_project_iam_member.gcp_gke_create_service_account_compute_networkUser"
@@ -133,7 +169,7 @@ resource "google_container_node_pool" "primary_preemptible_nodes" {
     machine_type = "n1-standard-1"
 
     //  service_account = "${google_service_account.gcp_gke_service_account.email}"
-    metadata {
+    metadata = {
       disable-legacy-endpoints = "true"
     }
   }
